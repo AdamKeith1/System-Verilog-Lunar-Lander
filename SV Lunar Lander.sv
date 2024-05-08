@@ -2,421 +2,481 @@
 // Empty top module
 
 module top (
-  // I/O ports
-  // Specific to FPGA modeled on (https://verilog.ecn.purdue.edu/) - a verilog simulator created by course coordinator Niraj Menon
-  input  logic hz100, reset,
-  input  logic [20:0] pb,
-  output logic [7:0] left, right,
-         ss7, ss6, ss5, ss4, ss3, ss2, ss1, ss0,
-  output logic red, green, blue,
+    // I/O ports
+    // Specific to FPGA modeled on (https://verilog.ecn.purdue.edu/) - a verilog simulator created by course coordinator Niraj Menon
+    input  logic hz100, reset,
+    input  logic [19:0] pb,
+    output logic [7:0] left, right,
+           ss7, ss6, ss5, ss4, ss3, ss2, ss1, ss0,
+    output logic red, green, blue,
 
-  // UART ports
-  output logic [7:0] txdata,
-  input  logic [7:0] rxdata,
-  output logic txclk, rxclk,
-  input  logic txready, rxready
+    // UART ports
+    output logic [7:0] txdata,
+    input  logic [7:0] rxdata,
+    output logic txclk, rxclk,
+    input  logic txready, rxready
+    );
+
+    lunarlander LL1 (.hz100(hz100), .reset(reset), .in(pb), .ss7(ss7), .ss6(ss6), .ss5(ss5), .ss3(ss3),
+                     .ss2(ss2), .ss1(ss1), .ss0(ss0), .red(red), .green(green));
+    
+endmodule
+
+module ll_memory 
+#(parameter ALTITUDE = 16'h4500, VELOCITY = 16'h0, FUEL = 16'h800, THRUST = 16'h5)
+(
+    input logic clk, 
+    input logic rst, 
+    input logic wen, 
+    input logic [15:0] alt_n, 
+    input logic [15:0] vel_n,
+    input logic [15:0] fuel_n, 
+    input logic [15:0] thrust_n, 
+    output logic [15:0] alt, 
+    output logic [15:0] vel,
+    output logic [15:0] fuel, 
+    output logic [15:0] thrust
 );
+    // Intermediate Registers
+    logic [15:0] current_alt;
+    logic [15:0] current_vel;
+    logic [15:0] current_fuel;
+    logic [15:0] current_thrust;
 
-// 4Hz Clock
-logic hz4;
-assign right[0] = hz4;
-clock_4hz ck(.clk(hz100), .rst(reset), .hz4(hz4));
-
-// Lunar Lander instantiation
-lunarlander #(16'h800, 16'h4500, 16'h0, 16'h5) ll (
-        .clk100(hz100), .clk(hz4), .reset(reset), .in(pb[19:0]), .fail(red), .land(green),
-        .seg({ss7, ss6, ss5, ss4, ss3, ss2, ss1, ss0})
-      );
-    
-endmodule
-
-module lunarlander #(parameter Fuel = 16'h800, parameter Alt = 16'h4500, parameter Vel = 16'h0, parameter Thrust = 16'h5,
-                     parameter GRAV = 16'h5) (input logic clk100, clk, reset, input logic [19:0] in, output logic fail, land,
-                     output logic [63:0] seg);
-
-    // Logic Initialization
-    logic [15:0] alt, alt_2, v, v_2, fuel, fuel_2, thrust, thrust_man, carry;
-    logic pulse;
-    logic [4:0] res;
-    logic [1:0] select;
-    logic [23:0] lookupmsg [3:0];
-    logic [15:0] val;
-    logic [15:0] negval;
-    logic [63:0] valdisp, negvaldisp;
-
-    // Calculations
-    bcdaddsub4 u1(.a(alt), .b(v), .op(0), .s(alt_2));
-    bcdaddsub4 u2(.a(v), .b(GRAV), .op(1), .s(carry));
-    bcdaddsub4 u3(.a(carry), .b(thrust), .op(0), .s(v_2));
-    bcdaddsub4 u4_(.a(fuel), .b(thrust), .op(1), .s(fuel_2));
-
-    // Thrust
-    scankey s1(.clk(clk100), .rst(reset), .in(in), .out(res), .strobe(pulse));
-
-    always_ff @ (posedge pulse, posedge reset) begin
-        if (reset == 1'b1) begin
-            thrust_man <= Thrust;
-        end
-        else if (res <= 9) begin
-            thrust_man <= {12'b000000000000, res[3:0]};
+    // Flip Flop
+    always_ff @(posedge clk or posedge rst) begin : FF
+        if (rst) begin
+            current_alt <= ALTITUDE;
+            current_vel <= VELOCITY;
+            current_fuel <= FUEL;
+            current_thrust <= THRUST;
+        end else if (wen) begin
+            current_alt <= alt_n;
+            current_vel <= vel_n;
+            current_fuel <= fuel_n;
+            current_thrust <= thrust_n;
         end
     end
 
-    // State Machine
-    typedef enum logic [2:0] {INIT=0, CALC=1, SET=2, CHK=3, HLT=4} flight_t;
-        logic [2:0] flight;
-        logic nland, ncrash;
+    assign alt = current_alt;
+    assign vel = current_vel;
+    assign fuel = current_fuel;
+    assign thrust = current_thrust;
 
-    always_ff @ (posedge clk, posedge reset) begin
-        if (reset == 1'b1) begin
-            ncrash <= 1'b0;
-            nland <= 1'b0;
-            fail <= 1'b0;
+endmodule
+
+module ll_alu 
+#(parameter GRAVITY = 16'h5)
+(
+    input logic [15:0] alt, 
+    input logic [15:0] vel, 
+    input logic [15:0] fuel, 
+    input logic [15:0] thrust,
+    output logic [15:0] alt_n, 
+    output logic [15:0] vel_n, 
+    output logic [15:0] fuel_n
+);
+    // Intermediaet Registers
+    logic [15:0] alt_c;
+    logic [15:0] vel_c;
+    logic [15:0] vel_c1;
+    logic [15:0] fuel_c;
+
+    // Arithmetic 
+    bcdaddsub4 alt_add_sub(.a(alt), .b(vel), .op(0), .s(alt_c));
+    bcdaddsub4 vel_subtract(.a(vel), .b(GRAVITY),.op(1), .s(vel_c));
+    bcdaddsub4 vel_subtract2(.a(vel_c), .b({(fuel == 0) ? 16'h0 :thrust}), .op(0), .s(vel_c1));
+    bcdaddsub4 fuel_subtract(.a(fuel), .b(thrust), .op(1), .s(fuel_c));
+
+    // Non-Positive Altitude and Velocity Logic
+    always_comb begin
+        if (alt_c[15] || alt_c == 0) begin
+            alt_n = 16'h0;
+            vel_n = 16'h0;
+        end else begin
+            alt_n = alt_c;
+            vel_n = vel_c1;
+        end
+        fuel_n = (fuel_c[15] || fuel_c == 0) ? 16'h0 : fuel_c;
+    end
+
+endmodule
+
+module ll_control (
+    input logic clk, 
+    input logic rst, 
+    input logic [15:0] alt, 
+    input logic [15:0] vel, 
+    output logic land, 
+    output logic crash, 
+    output logic wen
+    );
+    // Intermediate Registers
+    logic [15:0] alt_vel_sum;
+
+    // Arithmetic
+    bcdaddsub4 alt_vel_add(.a(alt), .b(vel), .op(0), .s(alt_vel_sum));
+
+    // Flip Flop
+    always_ff @(posedge clk or posedge rst) begin : FF
+        if (rst) begin
             land <= 1'b0;
-            flight <= INIT;
-            fuel <= Fuel;
-            alt <= Alt;
-            v <= Vel;
-            thrust <= Thrust;
-        end
-        else begin
-            if (flight == INIT) begin
-                flight <= CALC;
-            end
-            else if (flight == CALC) begin 
-                flight <= SET;
-            end
-            else if (flight == SET) begin
-                if (fuel_2[15] == 1'b1) begin
-                    fuel <= 16'd0;
+            crash <= 1'b0;
+            wen <= 1'b0;
+        end else begin
+            if (alt_vel_sum[15] || alt_vel_sum == 0) begin
+                if (vel < 16'h9970) begin
+                    crash <= 1'b1;
+                    land <= 1'b0;
+                    wen <= 1'b0;
                 end
                 else begin
-                    fuel <= fuel_2;
-                end
-                alt <= alt_2;
-                v <= v_2;
-                if ((fuel == 16'd0) | (fuel_2[15] == 1'b1)) begin
-                    thrust <= 16'd0;
-                end
-                else begin
-                    thrust <= thrust_man;
-                end
-                flight <= CHK;
-            end
-
-            else if (flight == CHK) begin
-                if ((v_2 > 16'h9970) && (alt_2[15] == 1'b1) && (thrust <= 5)) begin
-                    flight <= HLT;
-                    nland <= 1'b1;
-                end
-                else if (alt_2[15] == 1'b1) begin
-                    flight <= HLT;
-                    ncrash <= 1'b1;
-                end
-                else begin
-                    flight <= CALC;
+                    crash <= 1'b0;
+                    land <= 1'b1;
+                    wen <= 1'b0;
                 end
             end
-
             else begin
-                alt <= 16'd0;
-                v <= 16'd0;
-                land <= nland;
-                fail <= ncrash;
+                wen <= 1'b1;
             end
         end
     end
 
+endmodule
+
+module ll_display(
+    input logic clk, 
+    input logic rst, 
+    input logic land,
+    input logic crash, 
+    input logic [3:0] disp_ctrl, 
+    input logic [15:0] alt,
+    input logic [15:0] vel, 
+    input logic [15:0] fuel, 
+    input logic [15:0] thrust, 
+    output logic [7:0] ss7, ss6, ss5, ss3, ss2, ss1, ss0, 
+    output logic red,
+    output logic green
+    );
+    // Intermediate Registers
+    logic [4:0] hold;
+    logic [3:0] display_ctrl;
+    logic [15:0] alt_new;
+    logic [3:0] mode;
+    logic [3:0] new_mode;
+    logic [15:0] neg;
+    logic [15:0] num;
+    logic [23:0] state;
+    logic [6:0] display;
+
+    // Arithmetic
+    bcdaddsub4 convert(.a(0), .b(vel), .op(1'b1), .s(neg));
+
+    // FSM
     always_comb begin
-        lookupmsg[0] = 24'b011101110011100001111000;
-        lookupmsg[1] = 24'b001111100111100100111000;
-        lookupmsg[2] = 24'b011011110111011101101101;
-        lookupmsg[3] = 24'b011110000111011001010000;
-
-        case (select)
-        2'b00: val = alt;
-        2'b01: val = v;
-        2'b10: val = fuel;
-        2'b11: val = thrust;
-        endcase
-
-    end
-
-    bcdaddsub4 u4(.a(16'd0), .b(val), .op(1'b1), .s(negval));
-    display_32_bit d1(.in({16'b0, val}), .out(valdisp));
-    display_32_bit d2(.in({16'b0, negval}), .out(negvaldisp));
-
-    always_comb begin
-        if (val[15] == 1'b1) begin
-            seg = {lookupmsg[select], 8'b00000000, 8'b01000000, negvaldisp[23:0]};
+      {ss7, ss6, ss5} = 24'b011101110011100001111000;
+      num = alt;
+      case (mode)
+        4'b0001: begin
+          {ss7, ss6, ss5} = 24'b011110000111011001010000;
+          num = thrust;
         end
-        else begin 
-            seg = {lookupmsg[select], 8'b00000000, valdisp[31:0]};
+        4'b0010: begin
+          {ss7, ss6, ss5} = 24'b011011110111011101101101;
+          num = fuel;
         end
-    end
-
-    always_ff @ (posedge pulse, posedge reset) begin
-        if (reset == 1'b1) begin
-            select <= 2'b0;
+        4'b0100: begin
+          {ss7, ss6, ss5} = 24'b001111100111100100111000;
+          num = (vel[15] == 1) ? neg : vel;
         end
-        else begin
-            if (res == 5'd16) begin
-                select <= 2'b11;
-            end
-            else if (res == 5'd17) begin
-                select <= 2'b10;
-            end
-            else if (res == 5'd18) begin
-                select <= 2'b01;
-            end
-            else if (res == 5'd19) begin
-                select <= 2'b00;
-            end
+        4'b1000: begin
+          {ss7, ss6, ss5} = 24'b011101110011100001111000;
+          num = alt;
         end
-    end
-
-endmodule
-// Half Adder
-module ha (input logic a, b, output logic s, co);
-    assign s = a ^ b;
-    assign co = a & b;
-
-endmodule
-// Full Adder 1-bit
-module fa (input logic a, b, ci, output logic s, co);
-    assign s = (a ^ b ^ ci);
-    assign co = (a & b) | (a & ci) | (b & ci);
-
-endmodule
-// Full Adder 4-bit
-module fa4 (input logic [3:0] a, b, input logic ci, output logic [3:0] s, output logic co);
-    logic co_f1, co_f2, co_f3, co_f4;
-
-    fa f1(.a(a[0]), .b(b[0]), .ci(ci), .s(s[0]), .co(co_f1));
-    fa f2(.a(a[1]), .b(b[1]), .ci(co_f1), .s(s[1]), .co(co_f2));
-    fa f3(.a(a[2]), .b(b[2]), .ci(co_f2), .s(s[2]), .co(co_f3));
-    fa f4(.a(a[3]), .b(b[3]), .ci(co_f3), .s(s[3]), .co(co_f4));
-    
-    assign co = co_f4;
-
-endmodule
-// Full Adder 8-bit
-module fa8(input logic [7:0] a, b, input logic ci, output logic [7:0] s, output logic co);
-    logic co_f1, co_f2;
-
-    fa4 f1(.a(a[3:0]), .b(b[3:0]), .ci(ci), .s(s[3:0]), .co(co_f1));
-    fa4 f2(.a(a[7:4]), .b(b[7:4]), .ci(co_f1), .s(s[7:4]), .co(co_f2));
-
-    assign co = co_f2;
-
-endmodule 
-
-module addsub8 (input logic [7:0] a, b, input logic op, output logic [7:0] s, output logic co);
-    logic [7:0] radix;
-    assign radix = (b ^ {op, op, op, op, op, op, op, op});
-
-    fa8 f1(.a(a), .b(radix), .ci(op), .s(s), .co(co));
-
-endmodule
-
-module bcdadd1 (input logic [3:0] a, b, input logic ci, output logic co, output logic [3:0] s);
-    logic [3:0] y, x;
-    logic co_f1, correction;
-
-    fa4 f1(.a(a), .b(b), .ci(ci), .s(y), .co(co_f1));
-    
-    assign correction = co_f1 | (y[3] & y[2]) | (y[3] & y[1]);
-    assign x[3] = 1'b0;
-    assign x[0] = 1'b0;
-    assign x[1] = correction;
-    assign x[2] = correction;
-
-    fa4 f2(.a(x), .b(y), .ci(1'b0), .s(s), .co(co));
-
-endmodule
-
-module bcdadd4 (input logic [15:0] a, b, input logic ci, output logic co, output logic [15:0] s); 
-    logic co_f1, co_f2, co_f3, co_f4;
-
-
-    fa4 f1(.a(a[3:0]), .b(b[3:0]), .ci(ci), .s(s[3:0]), .co(co_f1));
-    fa4 f2(.a(a[7:4]), .b(b[7:4]), .ci(co_f1), .s(s[7:4]), .co(co_f2));
-    fa4 f3(.a(a[11:8]), .b(b[11:8]), .ci(co_f2), .s(s[11:8]), .co(co_f3));
-    fa4 f4(.a(a[15:12]), .b(b[15:12]), .ci(co_f3), .s(s[15:12]), .co(co_f4));
-    
-    assign co = co_f4;
-
-endmodule
-
-module bcd9comp1 (input logic [3:0] in, output logic [3:0] out);
-  always_comb
-    case(in) 
-      4'd9 : out = 4'd0;
-      4'd8 : out = 4'd1;
-      4'd7 : out = 4'd2;
-      4'd6 : out = 4'd3;
-      4'd5 : out = 4'd4;
-      4'd4 : out = 4'd5;
-      4'd3 : out = 4'd6;
-      4'd2 : out = 4'd7;
-      4'd1 : out = 4'd8;
-      4'd0 : out = 4'd9;
-      default: out = 4'd0;
-    endcase
-
-endmodule
-
-module bcdaddsub4 (input logic [15:0] a, b, input logic op, output logic [15:0] s);
-  logic carry_in;
-  logic [15:0] nine_cmp, b_mod;
-  // 9 Cpmplements
-  bcd9comp1 cmp1(.in(b[3:0]), .out(nine_cmp[3:0]));
-  bcd9comp1 cmp2(.in(b[7:4]), .out(nine_cmp[7:4]));
-  bcd9comp1 cmp3(.in(b[11:8]), .out(nine_cmp[11:8]));
-  bcd9comp1 cmp4(.in(b[15:12]), .out(nine_cmp[15:12]));
-
-  always @* begin
-    case (op)
-      1'b1 : b_mod = nine_cmp;
-      1'b0 : b_mod = b;
+        default: begin
+          {ss7, ss6, ss5} = 24'b011110000111011001010000;
+          num = thrust;
+        end
       endcase
-  end
-  
-  bcdadd4 ba1(.a(a), .b(b_mod), .ci(op), .s(s));
-
-endmodule
-
-module ssdec (input logic [3:0] in, input logic enable, output logic [6:0] out);
-
-  logic [6:0] SEG7 [15:0];
-
-  assign SEG7[4'h0] = 7'b0111111;
-  assign SEG7[4'h1] = 7'b0000110;
-  assign SEG7[4'h2] = 7'b1011011;
-  assign SEG7[4'h3] = 7'b1001111;
-  assign SEG7[4'h4] = 7'b1100110;
-  assign SEG7[4'h5] = 7'b1101101;
-  assign SEG7[4'h6] = 7'b1111101;
-  assign SEG7[4'h7] = 7'b0000111;
-  assign SEG7[4'h8] = 7'b1111111;
-  assign SEG7[4'h9] = 7'b1100111;
-  assign SEG7[4'ha] = 7'b1110111;
-  assign SEG7[4'hb] = 7'b1111100;
-  assign SEG7[4'hc] = 7'b0111001;
-  assign SEG7[4'hd] = 7'b1011110;
-  assign SEG7[4'he] = 7'b1111001;
-  assign SEG7[4'hf] = 7'b1110001;
-
-  assign out[6:0] = enable ? SEG7[in] : 7'b0000000;
-
-endmodule
-
-module  scankey(input logic clk, rst, input logic [19:0] in, output logic [4:0] out, output logic strobe);
-
-  logic keyclk;
-  assign keyclk = |in[19:0];
-  
-  logic [1:0] delay;
-  
-  always_ff @ (posedge clk) begin
-  if (rst == 1'b1)
-    delay[1] <= 0;
-  else
-    delay <= (delay << 1) | {1'b0, keyclk};
-  end
-    
-  assign strobe = delay[1];
-    
-  assign out[0] = in[1] | in[3] | in[5] | in[7] | in[9] | in[11] | in[13] | in[15] | in[17] | in[19];
-  assign out[1] = in[2] | in[3] | in[6] | in[7] | in[10] | in[11] | in[14] | in[15] | in[18] | in[19];
-  assign out[2] = (| in[7:4]) | (| in[15:12]);
-  assign out[3] = | in[15:8];
-  assign out[4] = | in[19:16];
-
-endmodule
-
-module display_32_bit (input logic [31:0] in, output logic [63:0] out);
-        ssdec s0(.in(in[3:0]), .enable(1'b1), .out(out[6:0]));
-        ssdec s1(.in(in[7:4]), .enable(|in[31:4]), .out(out[14:8]));
-        ssdec s2(.in(in[11:8]), .enable(|in[31:8]), .out(out[22:16]));
-        ssdec s3(.in(in[15:12]), .enable(|in[31:12]), .out(out[30:24]));
-        ssdec s4(.in(in[19:16]), .enable(|in[31:16]), .out(out[38:32]));
-        ssdec s5(.in(in[23:20]), .enable(|in[31:20]), .out(out[46:40]));
-        ssdec s6(.in(in[27:24]), .enable(|in[31:24]), .out(out[54:48]));
-        ssdec s7(.in(in[31:28]), .enable(|in[31:28]), .out(out[62:56]));
-endmodule
-
-module clock_4hz(input logic clk, rst, output logic hz4);
-
-    logic [7:0] ctr;
-    logic flash;
-    
-    count8du c8_1(.CLK(clk), .RST(rst), .DIR(1'b0), .E(1'b1), .MAX(8'd12), .Q(ctr[7:0]));
-
-    always_ff @ (posedge clk) begin
-    if (rst == 1'b1)
-        flash <= 1'b0;
-    else
-        flash <= (ctr == 8'd12);
     end
 
-    always_ff @ (posedge flash) begin
-    if (rst == 1'b1)
-        hz4 <= 1'b0;
-    else
-        hz4 <= ~hz4;
-  end
+    // Flip Flop
+    always_ff @(posedge clk, posedge rst) begin : FF
+      if (rst) begin
+        mode <= 4'b1000;
+      end
+      else begin
+        mode <= disp_ctrl;
+      end
+    end
+
+    // Display Instantiations + LED Assignment
+    ssdec display1(.in(num[3:0]), .enable(1'b1), .out(ss0[6:0]));
+    ssdec display2(.in(num[7:4]), .enable(|num[15:4]), .out(ss1[6:0]));
+    ssdec display3(.in(num[11:8]), .enable(|num[15:8]), .out(ss2[6:0]));
+    assign ss3 = ({ss7, ss6, ss5} == 24'b001111100111100100111000 && vel[15] == 1) ? 8'b1000000 : {1'b0, display};
+    ssdec display4(.in(num[15:12]), .enable(|num[15:12]), .out(display[6:0]));
+    assign red = rst ? 1'b0 : crash;
+    assign green = rst ? 1'b0 : land;
 
 endmodule
 
-module  count8du(input logic CLK, RST, DIR, E, input logic [7:0] MAX, output logic [7:0] Q);
+module lunarlander #(
+    parameter FUEL=16'h800,
+    parameter ALTITUDE=16'h4500,
+    parameter VELOCITY=16'h0,
+    parameter THRUST=16'h5,
+    parameter GRAVITY=16'h5
+    )(
+    input logic hz100, reset,
+    input logic [19:0] in,
+    output logic [7:0] ss7, ss6, ss5,
+    output logic [7:0] ss3, ss2, ss1, ss0,
+    output logic red, green
+    );
+    // Intermediate Registers
+    logic psc_clock;
+    logic clock_sync;
+    logic[4:0] ll_keyout;
+    logic[15:0] altitude;
+    logic[15:0] velocity;
+    logic[15:0] llfuel;
+    logic[15:0] llthrust;
+    logic[15:0] llthrust_2;
+    logic[15:0] altitude_2;
+    logic[15:0] velocity_2;
+    logic[15:0] llfuel_2;
+    logic ll_wen;
+    logic ll_clock;
+    logic ll_land;
+    logic ll_crash;
 
-    logic [7:0] next_Q;
+    // Module Instaantiations
+    clock_psc clock(.clk(hz100), .lim(8'd24), .rst(reset), .hzX(psc_clock));
+    keysync ll_sync(.rst(reset), .keyin(in[19:0]), .clk(hz100), .keyclk(clock_sync), .keyout(ll_keyout));
 
-
-        always_ff @ (posedge CLK, posedge RST) begin
-            if (RST == 1'b1)
-                Q <= 8'b00000000;
-            else  
-                Q <= next_Q;
+    // Flip Flop
+    always_ff @(posedge clock_sync, posedge reset) begin
+        if(reset) begin
+            llthrust_2 = 16'h5;
+        end else if((~ll_keyout[4])) begin
+            llthrust_2 = {12'b0, ll_keyout[3:0]};
         end
+    end
 
-        always_comb begin
-          if (E == 1'b1) begin
-            if (DIR == 1'b0) begin 
-                if (Q == 8'b0) begin
-                    next_Q = MAX;
-                end
-                else begin 
-                    next_Q[0] = ~Q[0];
-                    next_Q[1] = Q[1] ^ ~Q[0];
-                    next_Q[2] = Q[2] ^ (&(~Q[1:0]));
-                    next_Q[3] = Q[3] ^ (&(~Q[2:0]));
-                    next_Q[4] = Q[4] ^ (&(~Q[3:0]));
-                    next_Q[5] = Q[5] ^ (&(~Q[4:0]));
-                    next_Q[6] = Q[6] ^ (&(~Q[5:0]));
-                    next_Q[7] = Q[7] ^ (&(~Q[6:0]));
-                end
+    // Module Instantiations
+    ll_alu arithmetic(.alt(altitude), .fuel(llfuel), .vel(velocity), .thrust(llthrust), .alt_n(altitude_2), .vel_n(velocity_2), .fuel_n(llfuel_2));
+    ll_memory memory(.clk(psc_clock), .rst(reset), .wen(ll_wen), 
+                     .alt_n(altitude_2), .vel_n(velocity_2), .fuel_n(llfuel_2), .thrust_n(llthrust_2),
+                     .alt(altitude), .fuel(llfuel), .vel(velocity), .thrust(llthrust));
+    ll_display display(.clk(clock_sync), .rst(reset), .alt(altitude), .fuel(llfuel), .vel(velocity), .thrust(llthrust),
+                      .disp_ctrl({ll_keyout == 5'd19, ll_keyout == 5'd18, ll_keyout == 5'd17, ll_keyout == 5'd16}), .land(ll_land), .crash(ll_crash),
+                      .ss7(ss7), .ss6(ss6), .ss5(ss5), .ss3(ss3),
+                      .ss2(ss2), .ss1(ss1), .ss0(ss0), .red(red), .green(green));
+
+    ll_control control(.alt(altitude), .vel(velocity), .clk(psc_clock), .rst(reset), .crash(ll_crash), .land(ll_land), .wen(ll_wen));
+
+endmodule
+
+module fa (
+    input a, 
+    input b, 
+    input ci, 
+    output s, 
+    output co
+    );
+    assign s = a ^ b ^ ci;
+    assign co = (a & b) | (b & ci) | (a & ci);
+
+endmodule
+
+module fa4 (
+    input [3:0] a, 
+    input [3:0] b, 
+    input ci, 
+    output [3:0] s, 
+    output co
+    );
+    // Intermediate Registers
+    logic [3:0] co_intermediate;
+    // 1 Bit Full Adders
+    fa fa0 (.a(a[0]), .b(b[0]), .ci(ci), .s(s[0]), .co(co_intermediate[0]));
+    fa fa1 (.a(a[1]), .b(b[1]), .ci(co_intermediate[0]), .s(s[1]), .co(co_intermediate[1]));
+    fa fa2 (.a(a[2]), .b(b[2]), .ci(co_intermediate[1]), .s(s[2]), .co(co_intermediate[2]));
+    fa fa3 (.a(a[3]), .b(b[3]), .ci(co_intermediate[2]), .s(s[3]), .co(co_intermediate[3]));
+    // Assign Carry Out
+    assign co = co_intermediate[3];
+
+endmodule
+
+module bcdadd1 (
+    input [3:0] a, 
+    input [3:0] b, 
+    input ci, 
+    output [3:0] s, 
+    output co
+    );
+    // Intermediate Registers
+    logic fa4_co;
+    logic [3:0]fa4_sum;
+    logic co_int;
+
+    // 4 Bit Adder Instantiations
+    fa4 fa4_instance (.a(a), .b(b), .ci(ci), .s(fa4_sum), .co(fa4_co));
+    assign co_int = (fa4_sum[3] & fa4_sum[2]) | (fa4_sum[3] & fa4_sum[1]) | (fa4_co);
+    fa4 fa4_instance2 (.a({1'b0, co_int, co_int, 1'b0}), .b(fa4_sum), .ci(1'b0), .s(s), .co());
+    assign co = co_int;
+
+endmodule
+
+module bcdadd4 (
+    input [15:0] a, 
+    input [15:0] b, 
+    input ci, 
+    output [15:0] s, 
+    output co
+    );
+    // Intermediate Registers
+    logic [3:0] a_digit, b_digit;
+    logic [3:0] carry_out;
+    logic carry_in;
+    assign carry_in = ci;
+
+    // BCD Adders
+    bcdadd1 bcd_adder0 (.a(a[3:0]), .b(b[3:0]), .ci(carry_in), .s(s[3:0]), .co(carry_out[0]));
+    bcdadd1 bcd_adder1 (.a(a[7:4]), .b(b[7:4]), .ci(carry_out[0]), .s(s[7:4]), .co(carry_out[1]));
+    bcdadd1 bcd_adder2 (.a(a[11:8]), .b(b[11:8]), .ci(carry_out[1]), .s(s[11:8]), .co(carry_out[2]));
+    bcdadd1 bcd_adder3 (.a(a[15:12]), .b(b[15:12]), .ci(carry_out[2]), .s(s[15:12]), .co(carry_out[3]));
+    
+    assign co = carry_out[3];
+
+endmodule
+
+module bcd9comp1 (
+    input [3:0] in, 
+    output reg [3:0] out
+    );
+    // Case Assignments
+    always @(*) begin
+        case (in)
+            4'b0000: out = 4'b1001;
+            4'b0001: out = 4'b1000;
+            4'b0010: out = 4'b0111;
+            4'b0011: out = 4'b0110;
+            4'b0100: out = 4'b0101;
+            4'b0101: out = 4'b0100;
+            4'b0110: out = 4'b0011;
+            4'b0111: out = 4'b0010;
+            4'b1000: out = 4'b0001;
+            4'b1001: out = 4'b0000;
+            default: out = 4'b1001;
+        endcase
+    end
+
+endmodule
+
+module bcdaddsub4 (
+    input [15:0] a, 
+    input [15:0] b, 
+    input op, 
+    output [15:0] s
+    );
+    // Intermediate Registers
+    logic [15:0] c;
+
+    // Adders
+    bcdadd4 add(.a(a), .b(op ? c : b), .ci(op), .s(s), .co());
+    bcd9comp1 tc_a0 (.in(b[3:0]), .out(c[3:0]));
+    bcd9comp1 tc_a1 (.in(b[7:4]), .out(c[7:4]));
+    bcd9comp1 tc_a2 (.in(b[11:8]), .out(c[11:8]));
+    bcd9comp1 tc_a3 (.in(b[15:12]), .out(c[15:12]));
+    
+endmodule
+
+module clock_psc (
+    input logic clk, 
+    input logic rst, 
+    input logic [7:0] lim, 
+    output logic hzX
+    );
+    // Intermediate Registers
+    logic [7:0] counter;
+
+    // Flip Flop
+    always_ff @(posedge clk or posedge rst) begin : FF
+        if (rst) begin
+            counter <= 8'b0;
+            hzX <= 1'b0;
+        end else if(lim == 8'b0) begin
+            counter <= 8'b0;
+            hzX <= 1'b0;
+        end else begin
+            if (counter == lim) begin
+                counter <= 8'b0;
+                hzX <= ~hzX;
+            end else begin
+                counter <= counter + 1;
             end
-            else begin
-                if (Q == MAX) begin
-                    next_Q = 8'b0;
-                end
-                else begin
-                    next_Q[0] = ~Q[0];
-                    next_Q[1] = Q[1] ^ Q[0];
-                    next_Q[2] = Q[2] ^ (&Q[1:0]);
-                    next_Q[3] = Q[3] ^ (&Q[2:0]);
-                    next_Q[4] = Q[4] ^ (&Q[3:0]);
-                    next_Q[5] = Q[5] ^ (&Q[4:0]);
-                    next_Q[6] = Q[6] ^ (&Q[5:0]);
-                    next_Q[7] = Q[7] ^ (&Q[6:0]);
-                end
-            end
-          end
-          else begin
-            next_Q = Q;
-          end     
         end
-      
+    end
+
+endmodule
+
+module  keysync(
+    input logic clk,
+    input logic rst, 
+    input logic [19:0] keyin, 
+    output logic [4:0]keyout, 
+    output logic keyclk
+    );
+    // Intermediate Registers/Logic
+    logic keyclock;
+    assign keyclock = |keyin[19:0];
+    logic [1:0] delay;
+
+    // Flip Flop
+    always_ff @ (posedge clk) begin : FF
+    if (rst == 1'b1)
+      delay[1] <= 0;
+    else
+      delay <= (delay << 1) | {1'b0, keyclock};
+    end
+
+    assign keyclk = delay[1];
+
+    assign keyout[0] = keyin[1] | keyin[3] | keyin[5] | keyin[7] | keyin[9] | keyin[11] | keyin[13] | keyin[15] | keyin[17] | keyin[19];
+    assign keyout[1] = keyin[2] | keyin[3] | keyin[6] | keyin[7] | keyin[10] | keyin[11] | keyin[14] | keyin[15] | keyin[18] | keyin[19];
+    assign keyout[2] = (| keyin[7:4]) | (| keyin[15:12]);
+    assign keyout[3] = | keyin[15:8];
+    assign keyout[4] = | keyin[19:16];
+
+endmodule
+
+module ssdec (
+    input logic [3:0] in, 
+    input logic enable, 
+    output logic [6:0] out
+    );
+    // Intermediate Array
+    logic [6:0] SEG7 [15:0];
+
+    assign SEG7[4'h0] = 7'b0111111;
+    assign SEG7[4'h1] = 7'b0000110;
+    assign SEG7[4'h2] = 7'b1011011;
+    assign SEG7[4'h3] = 7'b1001111;
+    assign SEG7[4'h4] = 7'b1100110;
+    assign SEG7[4'h5] = 7'b1101101;
+    assign SEG7[4'h6] = 7'b1111101;
+    assign SEG7[4'h7] = 7'b0000111;
+    assign SEG7[4'h8] = 7'b1111111;
+    assign SEG7[4'h9] = 7'b1100111;
+    assign SEG7[4'ha] = 7'b1110111;
+    assign SEG7[4'hb] = 7'b1111100;
+    assign SEG7[4'hc] = 7'b0111001;
+    assign SEG7[4'hd] = 7'b1011110;
+    assign SEG7[4'he] = 7'b1111001;
+    assign SEG7[4'hf] = 7'b1110001;
+
+    assign out[6:0] = enable ? SEG7[in] : 7'b0000000;
+
 endmodule

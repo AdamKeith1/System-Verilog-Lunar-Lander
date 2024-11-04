@@ -6,4 +6,4 @@ Lunar Lander Calculates/Displays
   - fuel
   - status (crashed or landed)
 
-Specific to FPGA modeled on (https://verilog.ecn.purdue.edu/) - a verilog simulator created by course coordinator Niraj Menon
+Specific to FPGA modeled on (https://verilog.ecn.purdue.edu/)
